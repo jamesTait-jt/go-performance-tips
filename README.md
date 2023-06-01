@@ -350,7 +350,7 @@ Benchmark_PersonEfficient-10      261291204                4.577 ns/op          
 
 As we can see, the allocation has gone and the function is also nearly 10x faster! So, not only have we saved on the garbage collection time, but by avoiding writing to the heap we have saved ourselves an expensive operation.
 
-This method is be very useful when we want to parse a message from another service and convert it into a structure that is known by our service. I have shown it with strings, but the same method can be used with any slice, like a slice of bytes, for example.
+This method is very useful when we want to parse a message from another service and convert it into a structure that is known by our service. I have shown it with strings, but the same method can be used with any slice, like a slice of bytes, for example.
 
 ## string <-> []byte conversions
 
@@ -549,7 +549,7 @@ Benchmark_PersonBytes
 Benchmark_PersonBytes-10        12817989                91.76 ns/op           16 B/op          4 allocs/op
 ```
 
-So we are allocating even more memory to the heap due to the string conversions of the `age` and `height` fields. Now, let's introduce some unsafe functions to help us out (these ones are avtually pretty safe!)
+So we are allocating even more memory to the heap due to the string conversions of the `age` and `height` fields. Now, let's introduce some unsafe functions to help us out (these ones are actually pretty safe!)
 
 ```go
 func ToInt(bytes []byte) (int, bool) {
@@ -672,7 +672,7 @@ func growSlicePreAllocate() {
 }
 ```
 
-Here, we know that the `toAdd` bytes will be appended to the `bs` slice 3 times, giving us a final slice of length `6 * 3 = 18` bytes. So we pre-allocate this much memory which allows the compiler to allocate memory on the stack rather than allocating on the heap at runtime, and then having to handle the garbage colection as well.
+Here, we know that the `toAdd` bytes will be appended to the `bs` slice 3 times, giving us a final slice of length `6 * 3 = 18` bytes. So we pre-allocate this much memory which allows the compiler to allocate memory on the stack rather than allocating on the heap at runtime, and then having to handle the garbage collection as well.
 
 ```sh
 Benchmark_GrowSlicePreAllocate
@@ -724,7 +724,7 @@ func NoOpIntPtr(no NoOpper, n int) {
 }
 ```
 
-Here we have two trivial interface methods, one accepts an `int` and the other accepts an `*int`. We use `//go:noinline` to prevent the compiler from optimising out the function call as we can't rely on this in a producstion setting with ever-changing code. 
+Here we have two trivial interface methods, one accepts an `int` and the other accepts an `*int`. We use `//go:noinline` to prevent the compiler from optimising out the function call as we can't rely on this in a production setting with ever-changing code. 
 
 Even though these methods don't do anything, the expectation is that with the `*int` version, `n` will be allocated to the heap.
 
@@ -765,7 +765,7 @@ BenchmarkNoOpIntPtr
 BenchmarkNoOpIntPtr-10          131864689                9.051 ns/op           8 B/op          1 allocs/op
 ```
 
-As expected, the variable is allocated to the heap. Of course, the tradeoff is that if we did not pass a pointer, we would have to take a copy of the parameter to pass it into the called function's stackframe. The reccomendation here is to benchmark both options and see which is better for your application.
+As expected, the variable is allocated to the heap. Of course, the tradeoff is that if we did not pass a pointer, we would have to take a copy of the parameter to pass it into the called function's stackframe. The recommendation here is to benchmark both options and see which is better for your application.
 
 ## for i vs for range
 
