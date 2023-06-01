@@ -19,6 +19,6 @@ func fibSequential(n int) int {
         n2, n1 = n1, n1 + n2
     }
  
-	return n2 + n1
+    return n2 + n1
 }
 
