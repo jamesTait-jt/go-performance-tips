@@ -267,11 +267,11 @@ To exit the interactive pprof tool, type `q` and press enter!
 
 The Go runtime takes care of memory management for us, meaning we are able to focus on correctness and maintainability while writing applications. However, as mentioned before, for large programs, the garbage collection step can quickly become a bottleneck. Before we dive into some common memory issues, we should discuss the two main areas of memory. The stack and the heap.
 
-The stack refers to the callstack of a thread. It is a LIFO data structure that stores data as a thread executes functions. Each function call pushes a new frame to the stack, and each returning function pops (removes) from the stack.
+The stack refers to the callstack of a goroutine. It is a LIFO data structure that stores data as a goroutine executes functions. Each function call pushes a new frame to the stack, and each returning function pops (removes) from the stack.
 
 This means that when a function returns, we must be able to safely free the memory of the most recent stack frame, which means we must be sure that nothing is stored on the stack that must be used later.
 
-The amount of memory available to a thread's stack is limited, and normally quite small (this will be important later). Storing memory on the stack is very quick, and it is simple to free it as the memory is simply cleared.
+The amount of memory available to a goroutine's stack is limited, and normally quite small (this will be important later). Storing memory on the stack is very quick, and it is simple to free.
 
 The heap is an area of memory that has no relation to any specific thread and it can be accessed from anywhere within the program. This is where data is stored if it must be accessed after a function exits. Storing data on the heap is slow, and freeing the memory is not straightforward as we need to be sure the data is no longer needed. This happens during garbage collection and is a very expensive operation.
 
@@ -298,15 +298,20 @@ First let's write a function to parse until a delimiter.
 
 ```go
 func ParseUntil(s string, sep rune) (string, string) {
+    // If the string is empty, return two empty strings
     if len(s) == 0 {
         return "", ""
     }
 
+    // Get the index of the next separator
     indexOfNext := strings.Index(s, " ")
+
+    // If the separator didn't exist, return the whole string and an empty string
     if indexOfNext == -1 {
         return s, ""
     }
 
+    // Return the string up to the separator, followed by the string after the separator
     return s[:indexOfNext], s[indexOfNext + 1:]
 }
 ```
@@ -364,7 +369,7 @@ Something like this is likely to be on the boundaries of your service, and thus 
 
 Now that the motivation is out of the way, let's see why these conversions are pretty expensive.
 
-The first thing we need to understand is that strings in go are immutable. This means that once they are defined, they cannot be changed.
+The first thing we need to understand is that strings in go are immutable. This means that once they are defined, they cannot be changed. Conversely, byte-slices are mutable, so they can be modified at any time.
 
 The second thing is that strings and byte slices are both backed by [arrays](https://go.dev/tour/moretypes/6) under the hood.
 
@@ -383,7 +388,7 @@ func PersonBytes(bs []byte) person {
 }
 ```
 
-We are using a `[]byte` version of the `ParseUntil` function which we proved to be fast and memory efficient. And after that, we simply convert each field to a string so we can read the names. Now we can benchmark it as see how it performs.
+We are using a `[]byte` version of the `ParseUntil` function which we proved to be fast and memory efficient. And after that, we simply convert each field to a string so we can read the names. Now we can benchmark it and see how it performs.
 
 ```go
 func Benchmark_PersonBytes(b *testing.B) {
@@ -401,7 +406,7 @@ Benchmark_PersonBytes
 Benchmark_PersonBytes-10        51941656                22.68 ns/op           10 B/op          2 allocs/op
 ```
 
-We can see there are two allocations, and if we use escape analysis, we can see that both the string conversions escape to the heap:
+We can see there are two allocations, and if we tell the compiler to show us the escape analysis, we can see that both the string conversions escape to the heap:
 
 ```sh
 $ go build -gcflags="-m"
@@ -409,11 +414,11 @@ $ go build -gcflags="-m"
 ./parse.go:40:19: string(last) escapes to heap
 ```
 
-So why is this? Well, since strings are immutable, we can't just point the string at the backing array of the byte slice. If the byte slice were to be changed, the changes would reflect in the string, breaking go's promise of immutability. But since the string escapes the function, we must put it on the heap so that we don't delete it from memory once the stackframe has been popped. This means that every time we convert to and from byte slices, if the string is used afterwards, we will be performing costly heap allocations.
+So why is this? Well, since strings are immutable, we can't just point the string at the backing array of the byte slice. If the byte slice were to be changed, the changes would reflect in the string, breaking go's promise of immutability. But since the string escapes the function, we must put it on the heap so that we don't delete it from memory once the stackframe has been popped. This means that every time we convert to and from byte slices, if the result is used afterwards, we will be performing costly heap allocations.
 
 > :warning: Danger starts here!!!!
 
-We can avoid these allocations by breaking the string immutability promise. This is dangerous so we must be certain that we are careful here. In particular, we need to ensure that the byte slice will come out of scope as soon as we have converted it to a string. This will make sure we avoid any changes to the array that is now backing both the string and the byte slice.
+We can avoid these allocations by breaking the string immutability promise. This is dangerous so we must be certain that we are careful here. In particular, we need to ensure that the byte slice will come out of scope as soon as we have converted it to a string (or the string is an intermediate value that will be thrown away - more on that later). This will make sure we avoid any changes to the array that is now backing both the string and the byte slice.
 
 To begin, let's create a new package called `unsafe` and add the following file:
 
@@ -593,7 +598,7 @@ Benchmark_PersonBytesUnsafe
 Benchmark_PersonBytesUnsafe-10          19736895                59.81 ns/op            0 B/op          0 allocs/op
 ```
 
-### 32 byte optimisation
+### 32 Byte Optimisation
 
 There is an interesting compiler optimisation when converting `[]byte` to `string` when the slice has less than 32 bytes. There is a hardcoded buffer to avoid the heap allocations when the string does not escape.
 
@@ -659,7 +664,7 @@ Benchmark_GrowSlice
 Benchmark_GrowSlice-10                  23496968                48.22 ns/op           56 B/op          3 allocs/op
 ```
 
-every time the slice grows past its capacity, the entire slice needs to be reallocated on the heap with a larger capacity. The method is useful in a large number of use cases where we do not know the capacity of the slice, however, if we do know it then we can do a lot better and save on those costly runtime allocations.
+Every time the slice grows past its capacity, the entire slice needs to be reallocated on the heap with a larger capacity. The method is useful in a large number of use cases where we do not know the capacity of the slice, however, if we do know it then we can do a lot better and save on those costly runtime allocations.
 
 ```go
 func growSlicePreAllocate() {
@@ -681,21 +686,21 @@ Benchmark_GrowSlicePreAllocate-10       659889508                1.797 ns/op    
 
 ## Interfaces
 
-### Channels and function parameters
+### Channels and Function Parameters
 
-Sometimes it is preferable to use channels that accept the blank interface `interface{}` type, or functions that accept or return an `interface{}` type. However this can come with some performance issues. Whenever we do this, the compiler has to cast the type of the object passed into an `interface{}` type. If the object cannot fit in a single machine word (int, bool, etc) then a pointer to the object value object will be allocated to the heap, and the object value may be moved to the heap (this is not guaranteed behaviour). The same happens with typed interfaces.
+Sometimes it is preferable to use channels that accept the blank interface `interface{}` type, or functions that accept or return an `interface{}` type. However this can come with some performance issues. Whenever we do this, the compiler has to cast the type of the object passed into an `interface{}` type. If the object cannot fit in a single machine word then a pointer to the object will be allocated to the heap, and the object value may be moved to the heap (this is not guaranteed behaviour). The same happens with typed interfaces.
 
 This is often not a problem, but if you have noticed that the garbage collector is causing you issues then it might be worth redesigning some areas to avoid interfaces and use concrete types instead.
 
 Because of this behaviour, logging tends to be very expensive as the functions accept interface types to allow them to be flexible. I would recommend using a third party logger such as [zerolog](https://github.com/rs/zerolog).
 
-### Interface method calls
+### Interface Method Calls
 
-Sometimes when using interface methods, we can unknowingly allocate some of the method arguments to the heap. The situation in which this occurs is when the arguments to the function are pointers (remember this includes slices and strings!).
+Sometimes when using interface methods, we can unknowingly allocate some of the method arguments to the heap. The situation in which this occurs is when the arguments to the function are pointers to objects that are not already stored on the heap (remember this includes slices and strings!).
 
 The reason is that the compiler has no knowledge about the implementation of an interface method at compile time. So it is possible for the implementation to store the value somewhere (maybe a package level variable) and the compiler will have no idea.
 
-Let's say this is the case, and the method argument was a pointer. So the package level variable is pointing to the same location as the original pointer that we passes into the method. However, When the original pointer goes out of scope, the value pointed to by the pointer will be trashed. And thus, the package level variable will be pointing to garbage. Because of this, the pointer value is moved to the heap so that it is not trashed when the stackframe is popped.
+Let's say this is the case, and the method argument was a pointer. So the package level variable is pointing to the same location as the original pointer that we passed into the method. However, when the original pointer goes out of scope, the value pointed to by the pointer will be trashed. And thus, the package level variable will be pointing to garbage. Because of this, the pointer value is moved to the heap so that it is not trashed when the stackframe is popped.
 
 Here is an example with some benchmarks
 
@@ -838,7 +843,7 @@ func BenchmarkForI(b *testing.B) {
     }
 }
 
-func BenchmarkFoRange(b *testing.B) {
+func BenchmarkForRange(b *testing.B) {
     sl := []bigObj{
         {id: 0},
         {id: 1},
@@ -863,4 +868,4 @@ BenchmarkFoRange
 BenchmarkFoRange-10       467359              2543 ns/op               0 B/op          0 allocs/op
 ```
 
-As we can se, the forRange version performs far worse in this scenario! As a consequence of this, I would recommend sticking with the forI syntax.
+As we can see, the forRange version performs far worse in this scenario! As a consequence of this, I would recommend sticking with the `for i` syntax.
